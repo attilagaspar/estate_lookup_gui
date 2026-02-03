@@ -48,18 +48,35 @@ class EstateLookupGUI:
         try:
             # Load strikes data
             self.strikes_df = pd.read_csv(self.strikes_path, sep=';', dtype=str)
+            
+            # Aggressively clean column names - remove ALL whitespace including newlines, tabs, etc
+            # This handles columns that might already exist with bad names
+            cleaned_columns = {}
+            for col in self.strikes_df.columns:
+                clean_col = col.strip().replace('\n', '').replace('\r', '').replace('\t', '').replace(' ', '_')
+                cleaned_columns[col] = clean_col
+            
+            self.strikes_df.rename(columns=cleaned_columns, inplace=True)
             self.strikes_df = self.strikes_df.fillna('')
             
-            # Add gt_ids column if it doesn't exist
+            # Force add gt_ids column if it doesn't exist
             if 'gt_ids' not in self.strikes_df.columns:
                 self.strikes_df['gt_ids'] = ''
             
-            # Add reasoning column if it doesn't exist
+            # Force add reasoning column if it doesn't exist  
             if 'reasoning' not in self.strikes_df.columns:
                 self.strikes_df['reasoning'] = ''
             
-            # Load estates data
-            self.estates_df = pd.read_csv(self.estates_path, dtype=str)
+            # Load estates data with explicit encoding
+            self.estates_df = pd.read_csv(self.estates_path, dtype=str, encoding='utf-8', skipinitialspace=True)
+            
+            # Aggressively clean column names for estates too
+            cleaned_columns = {}
+            for col in self.estates_df.columns:
+                clean_col = col.strip().replace('\n', '').replace('\r', '').replace('\t', '').replace(' ', '_')
+                cleaned_columns[col] = clean_col
+            
+            self.estates_df.rename(columns=cleaned_columns, inplace=True)
             self.estates_df = self.estates_df.fillna('')
             
         except Exception as e:
@@ -151,12 +168,38 @@ class EstateLookupGUI:
         # Bind click event to toggle checkboxes
         self.estates_tree.bind('<Button-1>', self.on_estate_click)
         
-        # === SECTION 3: Prompt Text Box ===
+        # === SECTION 3: Prompt Text Box (Split into two columns) ===
         prompt_label = ttk.Label(main_frame, text="LLM Prompt", font=('Arial', 12, 'bold'))
         prompt_label.grid(row=4, column=0, sticky=tk.W, pady=(10, 5))
         
-        self.prompt_text = scrolledtext.ScrolledText(main_frame, height=8, wrap=tk.WORD)
-        self.prompt_text.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        # Create a frame to hold both text boxes side by side
+        text_frame = ttk.Frame(main_frame)
+        text_frame.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.columnconfigure(1, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+        
+        # Left side: Prompt text box
+        prompt_container = ttk.Frame(text_frame)
+        prompt_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 5))
+        prompt_container.columnconfigure(0, weight=1)
+        prompt_container.rowconfigure(0, weight=1)
+        
+        self.prompt_text = scrolledtext.ScrolledText(prompt_container, height=8, wrap=tk.WORD)
+        self.prompt_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Right side: LLM Response log
+        response_container = ttk.Frame(text_frame)
+        response_container.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(5, 0))
+        response_container.columnconfigure(0, weight=1)
+        response_container.rowconfigure(0, weight=1)
+        
+        response_label = ttk.Label(response_container, text="LLM Response", font=('Arial', 10, 'bold'))
+        response_label.grid(row=0, column=0, sticky=tk.W, pady=(0, 2))
+        
+        self.response_text = scrolledtext.ScrolledText(response_container, height=8, wrap=tk.WORD, state='disabled', bg='#f0f0f0')
+        self.response_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        response_container.rowconfigure(1, weight=1)
         
         # Default prompt
         default_prompt = """You are a historical data matching assistant specializing in Hungarian agricultural history. Your task is to link strike data from 1905-1907 to estate data from 1895.
@@ -200,16 +243,16 @@ REQUIRED: You MUST provide a clear chain of reasoning that explains:
 - Your confidence level in the match
 
 Return your answer as a JSON object with this exact format:
-{
+{{
   "gt_ids": ["11003", "11005"],
   "reasoning": "Settlement 'Bellye' from the strike matches estate settlement 'Bellye'. Owner 'fhg. Habsburg Frigyes' matches the estate owner 'Habsburg Frigyes főherceg' (fhg. = főherceg/archduke). High confidence match."
-}
+}}
 
 If no clear match exists, return:
-{
+{{
   "gt_ids": [],
   "reasoning": "No settlement name match found. Checked phonetic variations and nearby settlements but found no convincing matches for '{settlement}'."
-}
+}}
 
 Estates in {county}:
 {estates_json}
@@ -261,9 +304,18 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         for item in self.strikes_tree.get_children():
             self.strikes_tree.delete(item)
         
+        # Update treeview columns to match dataframe columns
+        current_columns = list(self.strikes_df.columns)
+        self.strikes_tree['columns'] = current_columns
+        
+        # Reconfigure column headings and widths
+        for col in current_columns:
+            self.strikes_tree.heading(col, text=col)
+            self.strikes_tree.column(col, width=100)
+        
         # Add rows
         for idx, row in self.strikes_df.iterrows():
-            values = [row[col] for col in self.strikes_df.columns]
+            values = [row[col] for col in current_columns]
             self.strikes_tree.insert('', 'end', iid=idx, values=values)
     
     def enable_hotkeys(self, event=None):
@@ -447,9 +499,14 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         self.selected_strike_idx = int(selection[0])
         strike_row = self.strikes_df.iloc[self.selected_strike_idx]
         
+        # Ensure gt_ids column exists
+        if 'gt_ids' not in self.strikes_df.columns:
+            self.strikes_df['gt_ids'] = ''
+        
         # If gt_ids already exist, display those estates
-        if strike_row['gt_ids']:
-            self.display_estates_by_ids(strike_row['gt_ids'], strike_row['county'])
+        gt_ids_value = strike_row.get('gt_ids', '')
+        if gt_ids_value and gt_ids_value != '':
+            self.display_estates_by_ids(gt_ids_value, strike_row['county'])
         else:
             # Show all estates from the same county
             self.display_estates_by_county(strike_row['county'])
@@ -516,6 +573,16 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         self.status_label.config(text="Looking up...", foreground="orange")
         self.root.update()
         
+        # VERBOSE DEBUG: Print column information
+        print("\n=== DEBUG: Column Information ===")
+        print("Number of columns:", len(self.strikes_df.columns))
+        print("\nColumn names (repr):")
+        for i, col in enumerate(self.strikes_df.columns):
+            print(f"  [{i}] {repr(col)} (type: {type(col).__name__})")
+        print("\nColumn names (str):")
+        print(self.strikes_df.columns.tolist())
+        print("=================================\n")
+        
         try:
             gt_ids = self.perform_llm_lookup(self.selected_strike_idx)
             
@@ -527,26 +594,53 @@ Return ONLY valid JSON in the format shown above, nothing else."""
                 self.status_label.config(text="No matches found", foreground="blue")
         
         except Exception as e:
-            messagebox.showerror("Error", f"Lookup failed: {str(e)}")
+            import traceback
+            error_details = f"Lookup failed: {type(e).__name__}: {str(e)}\n\nFull traceback:\n{traceback.format_exc()}\n\nDataFrame columns: {list(self.strikes_df.columns)}\n\nColumn names with repr:\n"
+            for col in self.strikes_df.columns:
+                error_details += f"  {repr(col)}\n"
+            messagebox.showerror("Error", error_details)
             self.status_label.config(text="Lookup failed", foreground="red")
+            print("=== DETAILED ERROR ===")
+            print(error_details)
+            print("======================")
+
     
     def perform_llm_lookup(self, strike_idx):
         """Perform the actual LLM lookup"""
-        strike_row = self.strikes_df.iloc[strike_idx]
-        county = strike_row['county']
+        # Ensure required columns exist
+        if 'gt_ids' not in self.strikes_df.columns:
+            self.strikes_df['gt_ids'] = ''
+        if 'reasoning' not in self.strikes_df.columns:
+            self.strikes_df['reasoning'] = ''
         
-        # Get all estates from the same county
-        county_estates = self.estates_df[self.estates_df['county'] == county]
+        print("\n=== DEBUG: perform_llm_lookup called ===")
+        print(f"Strike index: {strike_idx}")
+        print(f"Strikes df shape: {self.strikes_df.shape}")
+        print(f"Strikes columns: {self.strikes_df.columns.tolist()}")
         
-        # Prepare estates data for prompt
-        estates_list = []
-        for idx, estate in county_estates.iterrows():
-            estates_list.append({
-                'gt_id': estate['gt_id'],
-                'settlement': estate['settlement'],
-                'owner_name': estate['owner_name'],
-                'renter_name': estate['renter_name']
-            })
+        try:
+            print("Getting strike_row with iloc...")
+            strike_row = self.strikes_df.iloc[strike_idx]
+            print(f"Strike row type: {type(strike_row)}")
+            print(f"Strike row index: {strike_row.index.tolist()}")
+            print("\nAttempting to access 'county' column...")
+            county = strike_row['county']
+            print(f"County value: {county}")
+            
+            # Get all estates from the same county
+            county_estates = self.estates_df[self.estates_df['county'] == county]
+            
+            # Prepare estates data for prompt
+            estates_list = []
+            for idx, estate in county_estates.iterrows():
+                estates_list.append({
+                    'gt_id': estate['gt_id'],
+                    'settlement': estate['settlement'],
+                    'owner_name': estate['owner_name'],
+                    'renter_name': estate['renter_name']
+                })
+        except KeyError as e:
+            raise Exception(f"Column not found in dataframe: {str(e)}. Available columns: {', '.join(self.estates_df.columns.tolist())}")
         
         # Format prompt
         prompt = self.prompt_text.get('1.0', tk.END).strip()
@@ -566,12 +660,18 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             messages=[
                 {"role": "system", "content": "You are a historical data matching assistant specializing in Hungarian agricultural history. Use careful reasoning to match strike records to estates, considering historical place name changes and noble title variations. Return only valid JSON."},
                 {"role": "user", "content": prompt}
-            ],
-            temperature=0.2
+            ]
+            # Note: gpt-5 only supports default temperature (1.0)
         )
         
         # Parse response
         result_text = response.choices[0].message.content.strip()
+        
+        # Display the raw response in the response text box
+        self.response_text.config(state='normal')
+        self.response_text.delete('1.0', tk.END)
+        self.response_text.insert('1.0', f"=== RAW LLM RESPONSE ===\n\n{result_text}\n\n=== END RESPONSE ===")
+        self.response_text.config(state='disabled')
         
         # Try to extract JSON from response
         try:
@@ -586,31 +686,94 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             if isinstance(result_json, dict):
                 gt_ids = result_json.get('gt_ids', [])
                 reasoning = result_json.get('reasoning', '')
+                
+                # Ensure gt_ids is a list
+                if not isinstance(gt_ids, list):
+                    gt_ids = []
+                    reasoning = f'Invalid gt_ids format: {type(gt_ids).__name__}. ' + reasoning
+                    
+                # Update response text with parsing success
+                self.response_text.config(state='normal')
+                current = self.response_text.get('1.0', tk.END)
+                self.response_text.insert(tk.END, f"\n\n=== PARSED ===\ngt_ids: {gt_ids}\nreasoning: {reasoning}")
+                self.response_text.config(state='disabled')
             elif isinstance(result_json, list):
                 # Fallback: old format compatibility
                 gt_ids = result_json
                 reasoning = 'No reasoning provided (old format)'
+                
+                # Update response text
+                self.response_text.config(state='normal')
+                self.response_text.insert(tk.END, f"\n\n=== PARSED (old format) ===\ngt_ids: {gt_ids}")
+                self.response_text.config(state='disabled')
             else:
                 gt_ids = []
-                reasoning = 'Invalid response format'
+                reasoning = f'Invalid response format: {type(result_json).__name__}'
+                
+                # Update response text
+                self.response_text.config(state='normal')
+                self.response_text.insert(tk.END, f"\n\n=== PARSING ERROR ===\n{reasoning}")
+                self.response_text.config(state='disabled')
             
-            # Update the strikes dataframe
-            if isinstance(gt_ids, list):
-                self.strikes_df.at[strike_idx, 'gt_ids'] = json.dumps(gt_ids)
-                self.strikes_df.at[strike_idx, 'reasoning'] = reasoning
-                return gt_ids
-            else:
-                return []
-        except json.JSONDecodeError:
+            # Update the strikes dataframe with both gt_ids and reasoning
+            # Ensure columns exist before assignment
+            if 'gt_ids' not in self.strikes_df.columns:
+                self.strikes_df['gt_ids'] = ''
+            if 'reasoning' not in self.strikes_df.columns:
+                self.strikes_df['reasoning'] = ''
+            
+            # Now safely assign values using iat for position-based access
+            gt_ids_col_idx = self.strikes_df.columns.get_loc('gt_ids')
+            reasoning_col_idx = self.strikes_df.columns.get_loc('reasoning')
+            
+            self.strikes_df.iat[strike_idx, gt_ids_col_idx] = json.dumps(gt_ids) if gt_ids else ''
+            self.strikes_df.iat[strike_idx, reasoning_col_idx] = str(reasoning)
+            return gt_ids
+            
+        except json.JSONDecodeError as e:
             # If JSON parsing fails, try to extract IDs from text
             import re
             ids = re.findall(r'"(\d+)"', result_text)
+            
+            # Update response text with error
+            self.response_text.config(state='normal')
+            self.response_text.insert(tk.END, f"\n\n=== JSON PARSE ERROR ===\n{str(e)}\nExtracted IDs: {ids}")
+            self.response_text.config(state='disabled')
+            
+            # Ensure columns exist
+            if 'gt_ids' not in self.strikes_df.columns:
+                self.strikes_df['gt_ids'] = ''
+            if 'reasoning' not in self.strikes_df.columns:
+                self.strikes_df['reasoning'] = ''
+            
+            gt_ids_col_idx = self.strikes_df.columns.get_loc('gt_ids')
+            reasoning_col_idx = self.strikes_df.columns.get_loc('reasoning')
+            
             if ids:
-                self.strikes_df.at[strike_idx, 'gt_ids'] = json.dumps(ids)
-                self.strikes_df.at[strike_idx, 'reasoning'] = 'Parsing error - extracted IDs from text'
+                self.strikes_df.iat[strike_idx, gt_ids_col_idx] = json.dumps(ids)
+                self.strikes_df.iat[strike_idx, reasoning_col_idx] = f'JSON parse error - extracted IDs from text: {str(e)}'
                 return ids
-            self.strikes_df.at[strike_idx, 'reasoning'] = f'Parse error: {result_text[:200]}'
+            self.strikes_df.iat[strike_idx, gt_ids_col_idx] = ''
+            self.strikes_df.iat[strike_idx, reasoning_col_idx] = f'Parse error: {str(e)}. Response: {result_text[:200]}'
             return []
+        except Exception as e:
+            # Catch any other errors
+            # Update response text with error
+            self.response_text.config(state='normal')
+            self.response_text.insert(tk.END, f"\n\n=== UNEXPECTED ERROR ===\n{type(e).__name__}: {str(e)}")
+            self.response_text.config(state='disabled')
+            
+            if 'gt_ids' not in self.strikes_df.columns:
+                self.strikes_df['gt_ids'] = ''
+            if 'reasoning' not in self.strikes_df.columns:
+                self.strikes_df['reasoning'] = ''
+            
+            gt_ids_col_idx = self.strikes_df.columns.get_loc('gt_ids')
+            reasoning_col_idx = self.strikes_df.columns.get_loc('reasoning')
+            
+            self.strikes_df.iat[strike_idx, gt_ids_col_idx] = ''
+            self.strikes_df.iat[strike_idx, reasoning_col_idx] = f'Unexpected error: {str(e)}'
+            raise
     
     def save_matches(self):
         """Save the current matches to CSV (only checked estates)"""
@@ -629,13 +792,19 @@ Return ONLY valid JSON in the format shown above, nothing else."""
                         checked_gt_ids.append(gt_id)
             
             # Update the strikes dataframe with only checked IDs
-            if checked_gt_ids:
-                self.strikes_df.at[self.selected_strike_idx, 'gt_ids'] = json.dumps(checked_gt_ids)
-            else:
-                self.strikes_df.at[self.selected_strike_idx, 'gt_ids'] = ''
+            # Ensure column exists
+            if 'gt_ids' not in self.strikes_df.columns:
+                self.strikes_df['gt_ids'] = ''
             
-            # Save to CSV
-            self.strikes_df.to_csv(self.strikes_path, sep=';', index=False)
+            gt_ids_col_idx = self.strikes_df.columns.get_loc('gt_ids')
+            
+            if checked_gt_ids:
+                self.strikes_df.iat[self.selected_strike_idx, gt_ids_col_idx] = json.dumps(checked_gt_ids)
+            else:
+                self.strikes_df.iat[self.selected_strike_idx, gt_ids_col_idx] = ''
+            
+            # Save to CSV with explicit parameters to prevent corruption
+            self.strikes_df.to_csv(self.strikes_path, sep=';', index=False, encoding='utf-8', lineterminator='\n')
             
             # Refresh the table to show updated gt_ids
             self.populate_strikes_table()
@@ -667,8 +836,9 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         
         # Trigger the selection event
         strike_row = self.strikes_df.iloc[next_idx]
-        if strike_row['gt_ids']:
-            self.display_estates_by_ids(strike_row['gt_ids'], strike_row['county'])
+        gt_ids_value = strike_row.get('gt_ids', '') if 'gt_ids' in self.strikes_df.columns else ''
+        if gt_ids_value and gt_ids_value != '':
+            self.display_estates_by_ids(gt_ids_value, strike_row['county'])
         else:
             self.display_estates_by_county(strike_row['county'])
     
@@ -692,8 +862,9 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         
         # Trigger the selection event
         strike_row = self.strikes_df.iloc[prev_idx]
-        if strike_row['gt_ids']:
-            self.display_estates_by_ids(strike_row['gt_ids'], strike_row['county'])
+        gt_ids_value = strike_row.get('gt_ids', '') if 'gt_ids' in self.strikes_df.columns else ''
+        if gt_ids_value and gt_ids_value != '':
+            self.display_estates_by_ids(gt_ids_value, strike_row['county'])
         else:
             self.display_estates_by_county(strike_row['county'])
     
@@ -758,7 +929,7 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             
             # Auto-save every 10 rows
             if (self.current_auto_idx + 1) % 10 == 0:
-                self.strikes_df.to_csv(self.strikes_path, sep=';', index=False)
+                self.strikes_df.to_csv(self.strikes_path, sep=';', index=False, encoding='utf-8', lineterminator='\n')
             
             # Move to next
             self.current_auto_idx += 1
