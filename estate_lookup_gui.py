@@ -54,6 +54,10 @@ class EstateLookupGUI:
             if 'gt_ids' not in self.strikes_df.columns:
                 self.strikes_df['gt_ids'] = ''
             
+            # Add reasoning column if it doesn't exist
+            if 'reasoning' not in self.strikes_df.columns:
+                self.strikes_df['reasoning'] = ''
+            
             # Load estates data
             self.estates_df = pd.read_csv(self.estates_path, dtype=str)
             self.estates_df = self.estates_df.fillna('')
@@ -155,7 +159,7 @@ class EstateLookupGUI:
         self.prompt_text.grid(row=5, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         
         # Default prompt
-        default_prompt = """You are a historical data matching assistant. Your task is to link strike data to estate data.
+        default_prompt = """You are a historical data matching assistant specializing in Hungarian agricultural history. Your task is to link strike data from 1905-1907 to estate data from 1895.
 
 Given a strike record with the following information:
 - Year: {year}
@@ -165,20 +169,52 @@ Given a strike record with the following information:
 - Owner/Renter: {owner_renter}
 - Strike Type: {striketype}
 
-And a list of estates in the same county ({county}), identify which estate(s) are most likely associated with this strike.
+And a list of estates in the same county ({county}) from 1895, identify which estate(s) are most likely associated with this strike.
 
-Return your answer as a JSON list of gt_id values, e.g.: ["11003", "11005"]
-If no clear match exists, return an empty list: []
+IMPORTANT HISTORICAL CONTEXT:
+1. Settlement names may have changed between 1895 and 1905-1907 due to:
+   - Name evolution and linguistic changes
+   - Settlements merging or splitting
+   - Official renaming
+   - Changes in spelling conventions
+   - German/Hungarian name variations
 
-Consider:
-1. Owner/renter name similarities
-2. Settlement location matches
-3. Historical context and naming variations
+2. If you cannot find a direct settlement name match, consider:
+   - Similar-sounding names (phonetic matches)
+   - Nearby settlements that may have merged
+   - Historical name variants
+   - The geographic district (járás) information
+
+3. Owner/renter name matching considerations:
+   - Noble titles may be abbreviated differently (gr. = gróf/count, hg. = herceg/duke, fhg. = főherceg/archduke)
+   - Family names may appear with or without noble predicates
+   - Estate ownership could have transferred between 1895 and 1905-1907, so consider related family names
+   - Large landowners often had multiple estates
+
+4. When uncertain, prefer false negatives (no match) over false positives
+
+REQUIRED: You MUST provide a clear chain of reasoning that explains:
+- How you linked the strike settlement to the estate settlement(s)
+- Any name variations or historical changes you considered
+- Why you matched (or didn't match) the owner/renter names
+- Your confidence level in the match
+
+Return your answer as a JSON object with this exact format:
+{
+  "gt_ids": ["11003", "11005"],
+  "reasoning": "Settlement 'Bellye' from the strike matches estate settlement 'Bellye'. Owner 'fhg. Habsburg Frigyes' matches the estate owner 'Habsburg Frigyes főherceg' (fhg. = főherceg/archduke). High confidence match."
+}
+
+If no clear match exists, return:
+{
+  "gt_ids": [],
+  "reasoning": "No settlement name match found. Checked phonetic variations and nearby settlements but found no convincing matches for '{settlement}'."
+}
 
 Estates in {county}:
 {estates_json}
 
-Return ONLY the JSON list of gt_id values, nothing else."""
+Return ONLY valid JSON in the format shown above, nothing else."""
         
         self.prompt_text.insert('1.0', default_prompt)
         
@@ -526,12 +562,12 @@ Return ONLY the JSON list of gt_id values, nothing else."""
         
         # Call OpenAI API
         response = self.client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a historical data matching assistant. Return only valid JSON."},
+                {"role": "system", "content": "You are a historical data matching assistant specializing in Hungarian agricultural history. Use careful reasoning to match strike records to estates, considering historical place name changes and noble title variations. Return only valid JSON."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3
+            temperature=0.2
         )
         
         # Parse response
@@ -544,11 +580,24 @@ Return ONLY the JSON list of gt_id values, nothing else."""
                 lines = result_text.split('\n')
                 result_text = '\n'.join(lines[1:-1])
             
-            gt_ids = json.loads(result_text)
+            result_json = json.loads(result_text)
+            
+            # Extract gt_ids and reasoning
+            if isinstance(result_json, dict):
+                gt_ids = result_json.get('gt_ids', [])
+                reasoning = result_json.get('reasoning', '')
+            elif isinstance(result_json, list):
+                # Fallback: old format compatibility
+                gt_ids = result_json
+                reasoning = 'No reasoning provided (old format)'
+            else:
+                gt_ids = []
+                reasoning = 'Invalid response format'
             
             # Update the strikes dataframe
             if isinstance(gt_ids, list):
                 self.strikes_df.at[strike_idx, 'gt_ids'] = json.dumps(gt_ids)
+                self.strikes_df.at[strike_idx, 'reasoning'] = reasoning
                 return gt_ids
             else:
                 return []
@@ -558,7 +607,9 @@ Return ONLY the JSON list of gt_id values, nothing else."""
             ids = re.findall(r'"(\d+)"', result_text)
             if ids:
                 self.strikes_df.at[strike_idx, 'gt_ids'] = json.dumps(ids)
+                self.strikes_df.at[strike_idx, 'reasoning'] = 'Parsing error - extracted IDs from text'
                 return ids
+            self.strikes_df.at[strike_idx, 'reasoning'] = f'Parse error: {result_text[:200]}'
             return []
     
     def save_matches(self):
