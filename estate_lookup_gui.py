@@ -110,6 +110,8 @@ class EstateLookupGUI:
         
         # Bind selection event
         self.strikes_tree.bind('<<TreeviewSelect>>', self.on_strike_selected)
+        # Bind double-click for editing
+        self.strikes_tree.bind('<Double-Button-1>', self.on_strike_double_click)
         
         # === SECTION 2: Estates Table ===
         estates_label = ttk.Label(main_frame, text="Matched Estates", font=('Arial', 12, 'bold'))
@@ -180,6 +182,10 @@ Return ONLY the JSON list of gt_id values, nothing else."""
         
         self.prompt_text.insert('1.0', default_prompt)
         
+        # Bind focus events to disable/enable hotkeys when typing in prompt
+        self.prompt_text.bind('<FocusIn>', self.disable_hotkeys)
+        self.prompt_text.bind('<FocusOut>', self.enable_hotkeys)
+        
         # === SECTION 4: Control Buttons ===
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=6, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
@@ -190,25 +196,28 @@ Return ONLY the JSON list of gt_id values, nothing else."""
         self.save_btn = ttk.Button(button_frame, text="Save", command=self.save_matches, underline=0)
         self.save_btn.grid(row=0, column=1, padx=5)
         
+        self.up_btn = ttk.Button(button_frame, text="Up", command=self.go_to_previous, underline=0)
+        self.up_btn.grid(row=0, column=2, padx=5)
+        
+        self.down_btn = ttk.Button(button_frame, text="Down", command=self.go_to_next, underline=0)
+        self.down_btn.grid(row=0, column=3, padx=5)
+        
+        self.reload_btn = ttk.Button(button_frame, text="Reload", command=self.reload_data, underline=0)
+        self.reload_btn.grid(row=0, column=4, padx=5)
+        
         self.play_btn = ttk.Button(button_frame, text="▶ Play", command=self.start_auto_play, underline=2)
-        self.play_btn.grid(row=0, column=2, padx=5)
+        self.play_btn.grid(row=0, column=5, padx=5)
         
         self.stop_btn = ttk.Button(button_frame, text="⬛ sTop", command=self.stop_auto_play, state='disabled', underline=2)
-        self.stop_btn.grid(row=0, column=3, padx=5)
+        self.stop_btn.grid(row=0, column=6, padx=5)
         
         # Status label
         self.status_label = ttk.Label(button_frame, text="Ready", foreground="green")
-        self.status_label.grid(row=0, column=4, padx=20)
+        self.status_label.grid(row=0, column=7, padx=20)
         
-        # Bind keyboard shortcuts
-        self.root.bind('<KeyPress-l>', lambda e: self.lookup_single())
-        self.root.bind('<KeyPress-L>', lambda e: self.lookup_single())
-        self.root.bind('<KeyPress-s>', lambda e: self.save_matches())
-        self.root.bind('<KeyPress-S>', lambda e: self.save_matches())
-        self.root.bind('<KeyPress-p>', lambda e: self.start_auto_play())
-        self.root.bind('<KeyPress-P>', lambda e: self.start_auto_play())
-        self.root.bind('<KeyPress-t>', lambda e: self.stop_auto_play())
-        self.root.bind('<KeyPress-T>', lambda e: self.stop_auto_play())
+        # Bind keyboard shortcuts (store for later unbinding)
+        self.hotkeys_enabled = True
+        self.enable_hotkeys()
     
     def populate_strikes_table(self):
         """Populate the strikes table with data"""
@@ -221,14 +230,147 @@ Return ONLY the JSON list of gt_id values, nothing else."""
             values = [row[col] for col in self.strikes_df.columns]
             self.strikes_tree.insert('', 'end', iid=idx, values=values)
     
-    def on_estate_click(self, event):
-        """Handle click on estate row to toggle checkbox"""
-        region = self.estates_tree.identify('region', event.x, event.y)
+    def enable_hotkeys(self, event=None):
+        """Enable keyboard shortcuts"""
+        if self.hotkeys_enabled:
+            return
+        self.hotkeys_enabled = True
+        self.root.bind('<KeyPress-l>', lambda e: self.lookup_single())
+        self.root.bind('<KeyPress-L>', lambda e: self.lookup_single())
+        self.root.bind('<KeyPress-s>', lambda e: self.save_matches())
+        self.root.bind('<KeyPress-S>', lambda e: self.save_matches())
+        self.root.bind('<KeyPress-p>', lambda e: self.start_auto_play())
+        self.root.bind('<KeyPress-P>', lambda e: self.start_auto_play())
+        self.root.bind('<KeyPress-t>', lambda e: self.stop_auto_play())
+        self.root.bind('<KeyPress-T>', lambda e: self.stop_auto_play())
+        self.root.bind('<KeyPress-d>', lambda e: self.go_to_next())
+        self.root.bind('<KeyPress-D>', lambda e: self.go_to_next())
+        self.root.bind('<KeyPress-u>', lambda e: self.go_to_previous())
+        self.root.bind('<KeyPress-U>', lambda e: self.go_to_previous())
+        self.root.bind('<KeyPress-r>', lambda e: self.reload_data())
+        self.root.bind('<KeyPress-R>', lambda e: self.reload_data())
+    
+    def disable_hotkeys(self, event=None):
+        """Disable keyboard shortcuts when typing in prompt"""
+        if not self.hotkeys_enabled:
+            return
+        self.hotkeys_enabled = False
+        self.root.unbind('<KeyPress-l>')
+        self.root.unbind('<KeyPress-L>')
+        self.root.unbind('<KeyPress-s>')
+        self.root.unbind('<KeyPress-S>')
+        self.root.unbind('<KeyPress-p>')
+        self.root.unbind('<KeyPress-P>')
+        self.root.unbind('<KeyPress-t>')
+        self.root.unbind('<KeyPress-T>')
+        self.root.unbind('<KeyPress-d>')
+        self.root.unbind('<KeyPress-D>')
+        self.root.unbind('<KeyPress-u>')
+        self.root.unbind('<KeyPress-U>')
+        self.root.unbind('<KeyPress-r>')
+        self.root.unbind('<KeyPress-R>')
+    
+    def on_strike_double_click(self, event):
+        """Handle double-click on strike to edit it"""
+        region = self.strikes_tree.identify('region', event.x, event.y)
         if region != 'cell':
             return
         
+        item = self.strikes_tree.identify_row(event.y)
+        if not item:
+            return
+        
+        column = self.strikes_tree.identify_column(event.x)
+        col_idx = int(column.replace('#', '')) - 1
+        col_name = self.strikes_df.columns[col_idx]
+        
+        # Get current value
+        strike_idx = int(item)
+        current_value = self.strikes_df.at[strike_idx, col_name]
+        
+        # Create edit dialog
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Edit {col_name}")
+        dialog.geometry("400x150")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (dialog.winfo_width() // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Label
+        label = ttk.Label(dialog, text=f"Edit {col_name}:")
+        label.pack(pady=(20, 5), padx=20)
+        
+        # Entry field
+        entry = ttk.Entry(dialog, width=50)
+        entry.insert(0, current_value)
+        entry.pack(pady=5, padx=20)
+        entry.focus()
+        entry.select_range(0, tk.END)
+        
+        # Save function
+        def save_edit():
+            new_value = entry.get()
+            self.strikes_df.at[strike_idx, col_name] = new_value
+            self.populate_strikes_table()
+            # Re-select the edited row
+            self.strikes_tree.selection_set(str(strike_idx))
+            self.status_label.config(text="Strike data updated", foreground="green")
+            dialog.destroy()
+        
+        # Buttons
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(pady=15)
+        
+        save_btn = ttk.Button(button_frame, text="Save", command=save_edit)
+        save_btn.pack(side=tk.LEFT, padx=5)
+        
+        cancel_btn = ttk.Button(button_frame, text="Cancel", command=dialog.destroy)
+        cancel_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Bind Enter key to save
+        entry.bind('<Return>', lambda e: save_edit())
+        entry.bind('<Escape>', lambda e: dialog.destroy())
+    
+    def reload_data(self):
+        """Reload data from CSV files"""
+        try:
+            self.load_data()
+            self.populate_strikes_table()
+            
+            # Clear estates view
+            for item in self.estates_tree.get_children():
+                self.estates_tree.delete(item)
+            self.estate_checkboxes.clear()
+            
+            # Reset selection
+            self.selected_strike_idx = None
+            
+            self.status_label.config(text="Data reloaded from disk", foreground="green")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to reload data: {str(e)}")
+            self.status_label.config(text="Reload failed", foreground="red")
+    
+    def on_estate_click(self, event):
+        """Handle click on estate row or header to toggle checkbox"""
+        region = self.estates_tree.identify('region', event.x, event.y)
         column = self.estates_tree.identify_column(event.x)
-        if column != '#1':  # Only toggle if clicking the checkbox column
+        
+        # Only handle clicks on the checkbox column
+        if column != '#1':
+            return
+        
+        # Check if clicking on header
+        if region == 'heading':
+            self.toggle_all_checkboxes()
+            return
+        
+        if region != 'cell':
             return
         
         item = self.estates_tree.identify_row(event.y)
@@ -244,6 +386,21 @@ Return ONLY the JSON list of gt_id values, nothing else."""
         values = list(self.estates_tree.item(item, 'values'))
         values[0] = '☑' if new_state else '☐'
         self.estates_tree.item(item, values=values)
+    
+    def toggle_all_checkboxes(self):
+        """Toggle all checkboxes on or off"""
+        # Check if any checkbox is unchecked
+        all_checked = all(self.estate_checkboxes.get(item, False) for item in self.estates_tree.get_children())
+        
+        # If all are checked, uncheck all. Otherwise, check all.
+        new_state = not all_checked
+        
+        # Update all checkboxes
+        for item in self.estates_tree.get_children():
+            self.estate_checkboxes[item] = new_state
+            values = list(self.estates_tree.item(item, 'values'))
+            values[0] = '☑' if new_state else '☐'
+            self.estates_tree.item(item, values=values)
     
     def on_strike_selected(self, event):
         """Handle strike row selection"""
@@ -432,12 +589,62 @@ Return ONLY the JSON list of gt_id values, nothing else."""
             # Refresh the table to show updated gt_ids
             self.populate_strikes_table()
             
-            messagebox.showinfo("Success", f"Saved {len(checked_gt_ids)} matches successfully!")
-            self.status_label.config(text="Saved successfully", foreground="green")
+            # Update status (no popup)
+            self.status_label.config(text=f"Saved {len(checked_gt_ids)} matches", foreground="green")
         
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save: {str(e)}")
             self.status_label.config(text="Save failed", foreground="red")
+    
+    def go_to_next(self):
+        """Move to the next row in strikes table"""
+        if self.selected_strike_idx is None:
+            # If nothing selected, select first row
+            next_idx = 0
+        else:
+            next_idx = self.selected_strike_idx + 1
+        
+        # Check bounds
+        if next_idx >= len(self.strikes_df):
+            self.status_label.config(text="Already at last row", foreground="blue")
+            return
+        
+        # Select and show the row
+        self.strikes_tree.selection_set(str(next_idx))
+        self.strikes_tree.see(str(next_idx))
+        self.selected_strike_idx = next_idx
+        
+        # Trigger the selection event
+        strike_row = self.strikes_df.iloc[next_idx]
+        if strike_row['gt_ids']:
+            self.display_estates_by_ids(strike_row['gt_ids'], strike_row['county'])
+        else:
+            self.display_estates_by_county(strike_row['county'])
+    
+    def go_to_previous(self):
+        """Move to the previous row in strikes table"""
+        if self.selected_strike_idx is None:
+            self.status_label.config(text="No row selected", foreground="blue")
+            return
+        
+        prev_idx = self.selected_strike_idx - 1
+        
+        # Check bounds
+        if prev_idx < 0:
+            self.status_label.config(text="Already at first row", foreground="blue")
+            return
+        
+        # Select and show the row
+        self.strikes_tree.selection_set(str(prev_idx))
+        self.strikes_tree.see(str(prev_idx))
+        self.selected_strike_idx = prev_idx
+        
+        # Trigger the selection event
+        strike_row = self.strikes_df.iloc[prev_idx]
+        if strike_row['gt_ids']:
+            self.display_estates_by_ids(strike_row['gt_ids'], strike_row['county'])
+        else:
+            self.display_estates_by_county(strike_row['county'])
     
     def start_auto_play(self):
         """Start automatic iteration through strikes"""
