@@ -30,6 +30,7 @@ class EstateLookupGUI:
         self.selected_strike_idx = None
         self.auto_play_running = False
         self.current_auto_idx = 0
+        self.estate_checkboxes = {}  # Track checkbox states by item id
         
         # Initialize OpenAI client if available
         self.client = None
@@ -120,12 +121,14 @@ class EstateLookupGUI:
         estates_frame.columnconfigure(0, weight=1)
         estates_frame.rowconfigure(0, weight=1)
         
-        # Create Treeview for estates
-        estates_columns = list(self.estates_df.columns)
+        # Create Treeview for estates with checkbox column
+        estates_columns = ['✓'] + list(self.estates_df.columns)
         self.estates_tree = ttk.Treeview(estates_frame, columns=estates_columns, show='headings', height=10)
         
         # Configure columns
-        for col in estates_columns:
+        self.estates_tree.heading('✓', text='✓')
+        self.estates_tree.column('✓', width=30, anchor='center')
+        for col in self.estates_df.columns:
             self.estates_tree.heading(col, text=col)
             self.estates_tree.column(col, width=120)
         
@@ -138,6 +141,9 @@ class EstateLookupGUI:
         self.estates_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         estates_vsb.grid(row=0, column=1, sticky=(tk.N, tk.S))
         estates_hsb.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        
+        # Bind click event to toggle checkboxes
+        self.estates_tree.bind('<Button-1>', self.on_estate_click)
         
         # === SECTION 3: Prompt Text Box ===
         prompt_label = ttk.Label(main_frame, text="LLM Prompt", font=('Arial', 12, 'bold'))
@@ -178,21 +184,31 @@ Return ONLY the JSON list of gt_id values, nothing else."""
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=6, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
         
-        self.lookup_btn = ttk.Button(button_frame, text="Lookup", command=self.lookup_single)
+        self.lookup_btn = ttk.Button(button_frame, text="Lookup", command=self.lookup_single, underline=0)
         self.lookup_btn.grid(row=0, column=0, padx=5)
         
-        self.save_btn = ttk.Button(button_frame, text="Save", command=self.save_matches)
+        self.save_btn = ttk.Button(button_frame, text="Save", command=self.save_matches, underline=0)
         self.save_btn.grid(row=0, column=1, padx=5)
         
-        self.play_btn = ttk.Button(button_frame, text="▶ Play", command=self.start_auto_play)
+        self.play_btn = ttk.Button(button_frame, text="▶ Play", command=self.start_auto_play, underline=2)
         self.play_btn.grid(row=0, column=2, padx=5)
         
-        self.stop_btn = ttk.Button(button_frame, text="⬛ Stop", command=self.stop_auto_play, state='disabled')
+        self.stop_btn = ttk.Button(button_frame, text="⬛ sTop", command=self.stop_auto_play, state='disabled', underline=2)
         self.stop_btn.grid(row=0, column=3, padx=5)
         
         # Status label
         self.status_label = ttk.Label(button_frame, text="Ready", foreground="green")
         self.status_label.grid(row=0, column=4, padx=20)
+        
+        # Bind keyboard shortcuts
+        self.root.bind('<KeyPress-l>', lambda e: self.lookup_single())
+        self.root.bind('<KeyPress-L>', lambda e: self.lookup_single())
+        self.root.bind('<KeyPress-s>', lambda e: self.save_matches())
+        self.root.bind('<KeyPress-S>', lambda e: self.save_matches())
+        self.root.bind('<KeyPress-p>', lambda e: self.start_auto_play())
+        self.root.bind('<KeyPress-P>', lambda e: self.start_auto_play())
+        self.root.bind('<KeyPress-t>', lambda e: self.stop_auto_play())
+        self.root.bind('<KeyPress-T>', lambda e: self.stop_auto_play())
     
     def populate_strikes_table(self):
         """Populate the strikes table with data"""
@@ -204,6 +220,30 @@ Return ONLY the JSON list of gt_id values, nothing else."""
         for idx, row in self.strikes_df.iterrows():
             values = [row[col] for col in self.strikes_df.columns]
             self.strikes_tree.insert('', 'end', iid=idx, values=values)
+    
+    def on_estate_click(self, event):
+        """Handle click on estate row to toggle checkbox"""
+        region = self.estates_tree.identify('region', event.x, event.y)
+        if region != 'cell':
+            return
+        
+        column = self.estates_tree.identify_column(event.x)
+        if column != '#1':  # Only toggle if clicking the checkbox column
+            return
+        
+        item = self.estates_tree.identify_row(event.y)
+        if not item:
+            return
+        
+        # Toggle checkbox state
+        current_state = self.estate_checkboxes.get(item, False)
+        new_state = not current_state
+        self.estate_checkboxes[item] = new_state
+        
+        # Update display
+        values = list(self.estates_tree.item(item, 'values'))
+        values[0] = '☑' if new_state else '☐'
+        self.estates_tree.item(item, values=values)
     
     def on_strike_selected(self, event):
         """Handle strike row selection"""
@@ -226,14 +266,16 @@ Return ONLY the JSON list of gt_id values, nothing else."""
         # Clear existing items
         for item in self.estates_tree.get_children():
             self.estates_tree.delete(item)
+        self.estate_checkboxes.clear()
         
         # Filter estates by county
         county_estates = self.estates_df[self.estates_df['county'] == county]
         
-        # Add rows
+        # Add rows with checkboxes (all checked by default)
         for idx, row in county_estates.iterrows():
-            values = [row[col] for col in self.estates_df.columns]
-            self.estates_tree.insert('', 'end', values=values)
+            values = ['☐'] + [row[col] for col in self.estates_df.columns]
+            item_id = self.estates_tree.insert('', 'end', values=values)
+            self.estate_checkboxes[item_id] = False  # Unchecked for county view
         
         self.status_label.config(text=f"Showing {len(county_estates)} estates from {county}")
     
@@ -242,6 +284,7 @@ Return ONLY the JSON list of gt_id values, nothing else."""
         # Clear existing items
         for item in self.estates_tree.get_children():
             self.estates_tree.delete(item)
+        self.estate_checkboxes.clear()
         
         # Parse gt_ids
         try:
@@ -259,10 +302,11 @@ Return ONLY the JSON list of gt_id values, nothing else."""
         # Filter estates by gt_ids
         matched_estates = self.estates_df[self.estates_df['gt_id'].isin(gt_ids)]
         
-        # Add rows
+        # Add rows with checkboxes (all checked by default for matched estates)
         for idx, row in matched_estates.iterrows():
-            values = [row[col] for col in self.estates_df.columns]
-            self.estates_tree.insert('', 'end', values=values)
+            values = ['☑'] + [row[col] for col in self.estates_df.columns]
+            item_id = self.estates_tree.insert('', 'end', values=values)
+            self.estate_checkboxes[item_id] = True  # Checked by default
         
         self.status_label.config(text=f"Showing {len(matched_estates)} matched estates")
     
@@ -361,15 +405,34 @@ Return ONLY the JSON list of gt_id values, nothing else."""
             return []
     
     def save_matches(self):
-        """Save the current matches to CSV"""
+        """Save the current matches to CSV (only checked estates)"""
+        if self.selected_strike_idx is None:
+            messagebox.showwarning("Warning", "Please select a strike row first")
+            return
+        
         try:
+            # Get only checked estates
+            checked_gt_ids = []
+            for item_id, is_checked in self.estate_checkboxes.items():
+                if is_checked:
+                    values = self.estates_tree.item(item_id, 'values')
+                    if len(values) > 1:  # Skip checkbox column
+                        gt_id = values[1]  # gt_id is the first column after checkbox
+                        checked_gt_ids.append(gt_id)
+            
+            # Update the strikes dataframe with only checked IDs
+            if checked_gt_ids:
+                self.strikes_df.at[self.selected_strike_idx, 'gt_ids'] = json.dumps(checked_gt_ids)
+            else:
+                self.strikes_df.at[self.selected_strike_idx, 'gt_ids'] = ''
+            
             # Save to CSV
             self.strikes_df.to_csv(self.strikes_path, sep=';', index=False)
             
             # Refresh the table to show updated gt_ids
             self.populate_strikes_table()
             
-            messagebox.showinfo("Success", "Matches saved successfully!")
+            messagebox.showinfo("Success", f"Saved {len(checked_gt_ids)} matches successfully!")
             self.status_label.config(text="Saved successfully", foreground="green")
         
         except Exception as e:
