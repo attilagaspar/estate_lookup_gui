@@ -290,9 +290,19 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         self.stop_btn = ttk.Button(button_frame, text="⬛ sTop", command=self.stop_auto_play, state='disabled', underline=2)
         self.stop_btn.grid(row=0, column=6, padx=5)
         
+        # Model selection dropdown
+        model_label = ttk.Label(button_frame, text="Model:")
+        model_label.grid(row=0, column=7, padx=(20, 5))
+        
+        self.model_var = tk.StringVar(value="gpt-5")
+        self.model_dropdown = ttk.Combobox(button_frame, textvariable=self.model_var, 
+                                           values=["gpt-5", "gpt-4o", "o1", "o1-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+                                           state="readonly", width=15)
+        self.model_dropdown.grid(row=0, column=8, padx=5)
+        
         # Status label
         self.status_label = ttk.Label(button_frame, text="Ready", foreground="green")
-        self.status_label.grid(row=0, column=7, padx=20)
+        self.status_label.grid(row=0, column=9, padx=20)
         
         # Bind keyboard shortcuts (store for later unbinding)
         self.hotkeys_enabled = True
@@ -654,15 +664,42 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             estates_json=json.dumps(estates_list, ensure_ascii=False, indent=2)
         )
         
-        # Call OpenAI API
-        response = self.client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a historical data matching assistant specializing in Hungarian agricultural history. Use careful reasoning to match strike records to estates, considering historical place name changes and noble title variations. Return only valid JSON."},
-                {"role": "user", "content": prompt}
-            ]
-            # Note: gpt-5 only supports default temperature (1.0)
-        )
+        # Get selected model
+        selected_model = self.model_var.get()
+        
+        # Prepare system message
+        system_msg = "You are a historical data matching assistant specializing in Hungarian agricultural history. Use careful reasoning to match strike records to estates, considering historical place name changes and noble title variations. Return only valid JSON."
+        
+        # Call OpenAI API with model-specific parameters
+        if selected_model.startswith('o1'):
+            # o1 models don't support system messages or temperature
+            # Combine system message with user prompt
+            full_prompt = f"{system_msg}\n\n{prompt}"
+            response = self.client.chat.completions.create(
+                model=selected_model,
+                messages=[
+                    {"role": "user", "content": full_prompt}
+                ]
+            )
+        elif selected_model == 'gpt-5':
+            # gpt-5 doesn't support temperature parameter
+            response = self.client.chat.completions.create(
+                model=selected_model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+        else:
+            # Other models (gpt-4o, gpt-4-turbo, gpt-3.5-turbo) support temperature
+            response = self.client.chat.completions.create(
+                model=selected_model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2
+            )
         
         # Parse response
         result_text = response.choices[0].message.content.strip()
@@ -675,12 +712,24 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         
         # Try to extract JSON from response
         try:
-            # Remove markdown code blocks if present
-            if result_text.startswith('```'):
-                lines = result_text.split('\n')
-                result_text = '\n'.join(lines[1:-1])
+            # Remove markdown code blocks if present (more robust)
+            cleaned_text = result_text.strip()
             
-            result_json = json.loads(result_text)
+            # Check for code block markers and remove them
+            if cleaned_text.startswith('```'):
+                # Find the end of the first line (e.g., ```json or just ```)
+                first_newline = cleaned_text.find('\n')
+                if first_newline != -1:
+                    cleaned_text = cleaned_text[first_newline + 1:]
+                else:
+                    # No newline after ```, just remove the ```
+                    cleaned_text = cleaned_text[3:]
+            
+            # Remove trailing code block marker if present
+            if cleaned_text.endswith('```'):
+                cleaned_text = cleaned_text[:-3].strip()
+            
+            result_json = json.loads(cleaned_text)
             
             # Extract gt_ids and reasoning
             if isinstance(result_json, dict):
@@ -921,6 +970,13 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         try:
             # Perform lookup
             gt_ids = self.perform_llm_lookup(self.current_auto_idx)
+            
+            # Refresh the strikes table to show updated gt_ids and reasoning
+            self.populate_strikes_table()
+            
+            # Re-select the current row after refresh
+            self.strikes_tree.selection_set(str(self.current_auto_idx))
+            self.strikes_tree.see(str(self.current_auto_idx))
             
             # Display results
             if gt_ids:
