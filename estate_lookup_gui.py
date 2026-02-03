@@ -292,7 +292,7 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         
         self.model_var = tk.StringVar(value="gpt-5")
         self.model_dropdown = ttk.Combobox(button_frame, textvariable=self.model_var, 
-                                           values=["gpt-5", "gpt-4o", "o1", "o1-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+                                           values=["gpt-5", "gpt-4o", "gpt-4o-mini", "o1", "o1-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
                                            state="readonly", width=15)
         self.model_dropdown.grid(row=0, column=8, padx=5)
         
