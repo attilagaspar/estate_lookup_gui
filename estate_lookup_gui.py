@@ -206,40 +206,36 @@ class EstateLookupGUI:
 
 Given a strike record with the following information:
 - Year: {year}
-- Date: {date}
 - County: {county}
 - Settlement: {settlement}
 - Owner/Renter: {owner_renter}
-- Strike Type: {striketype}
 
 And a list of estates in the same county ({county}) from 1895, identify which estate(s) are most likely associated with this strike.
 
-IMPORTANT HISTORICAL CONTEXT:
-1. Settlement names may have changed between 1895 and 1905-1907 due to:
-   - Name evolution and linguistic changes
-   - Settlements merging or splitting
-   - Official renaming
-   - Changes in spelling conventions
-   - German/Hungarian name variations
+MATCHING PRIORITY (in order of importance):
+1. **SETTLEMENT/LOCATION MATCH (HIGHEST PRIORITY)**: The settlement name is the most important factor. 
+   - Exact matches or clear historical variants of the same place should be prioritized
+   - Settlement names may have changed between 1895 and 1905-1907 due to:
+     * Name evolution and linguistic changes
+     * Settlements merging or splitting
+     * Official renaming
+     * Changes in spelling conventions
+   - Consider: Similar-sounding names (phonetic matches), nearby settlements that may have merged, historical name variants
 
-2. If you cannot find a direct settlement name match, consider:
-   - Similar-sounding names (phonetic matches)
-   - Nearby settlements that may have merged
-   - Historical name variants
-   - The geographic district (járás) information
-
-3. Owner/renter name matching considerations:
+2. **OWNER/RENTER NAME MATCH (SECONDARY)**: Owner names matter but are less decisive than location
+   - Estate ownership could have transferred within families between 1895 and 1905-1907
+   - If the settlement matches perfectly but the owner is different within the same family (e.g., Zichy Jenő in 1895 → Zichy Ödön in 1905), this is still a STRONG match
+   - A location match with related family names (same surname, different first name) is BETTER than a nearby location with identical owner names
    - Noble titles may be abbreviated differently (gr. = gróf/count, hg. = herceg/duke, fhg. = főherceg/archduke)
    - Family names may appear with or without noble predicates
-   - Estate ownership could have transferred between 1895 and 1905-1907, so consider related family names
    - Large landowners often had multiple estates
 
-4. When uncertain, prefer false negatives (no match) over false positives
+3. When uncertain, prefer false negatives (no match) over false positives
 
 REQUIRED: You MUST provide a clear chain of reasoning that explains:
-- How you linked the strike settlement to the estate settlement(s)
-- Any name variations or historical changes you considered
-- Why you matched (or didn't match) the owner/renter names
+- How you linked the strike settlement to the estate settlement(s) (most important factor)
+- Any name variations or historical changes you considered for the location
+- Why you matched (or didn't match) the owner/renter names (secondary factor)
 - Your confidence level in the match
 
 Return your answer as a JSON object with this exact format:
@@ -953,6 +949,21 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             self.stop_auto_play()
             if self.current_auto_idx >= len(self.strikes_df):
                 messagebox.showinfo("Complete", "All strikes processed!")
+            return
+        
+        # Skip rows that already have gt_ids (non-empty)
+        while self.current_auto_idx < len(self.strikes_df):
+            current_gt_ids = self.strikes_df.iloc[self.current_auto_idx]['gt_ids']
+            # Check if gt_ids is empty or just whitespace
+            if not current_gt_ids or str(current_gt_ids).strip() == '':
+                break  # Found a row without gt_ids
+            # Skip this row, move to next
+            self.current_auto_idx += 1
+        
+        # Check again if we've reached the end after skipping
+        if self.current_auto_idx >= len(self.strikes_df):
+            self.stop_auto_play()
+            messagebox.showinfo("Complete", "All unprocessed strikes completed!")
             return
         
         # Select current row
