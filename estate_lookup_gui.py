@@ -140,7 +140,7 @@ class EstateLookupGUI:
             self.strikes_tree.heading(col, text=col)
             self.strikes_tree.column(col, width=final_width)
         
-        # Store column widths for reference
+        # Store column widths for later use in text wrapping
         self.strikes_col_widths = final_col_widths
         
         # Add scrollbars
@@ -305,34 +305,37 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         self.save_btn = ttk.Button(button_frame, text="Save", command=self.save_matches, underline=0)
         self.save_btn.grid(row=0, column=1, padx=5)
         
+        self.reset_btn = ttk.Button(button_frame, text="Reset", command=self.reset_matches, underline=2)
+        self.reset_btn.grid(row=0, column=2, padx=5)
+        
         self.up_btn = ttk.Button(button_frame, text="Up", command=self.go_to_previous, underline=0)
-        self.up_btn.grid(row=0, column=2, padx=5)
+        self.up_btn.grid(row=0, column=3, padx=5)
         
         self.down_btn = ttk.Button(button_frame, text="Down", command=self.go_to_next, underline=0)
-        self.down_btn.grid(row=0, column=3, padx=5)
+        self.down_btn.grid(row=0, column=4, padx=5)
         
         self.reload_btn = ttk.Button(button_frame, text="Reload", command=self.reload_data, underline=0)
-        self.reload_btn.grid(row=0, column=4, padx=5)
+        self.reload_btn.grid(row=0, column=5, padx=5)
         
         self.play_btn = ttk.Button(button_frame, text="▶ Play", command=self.start_auto_play, underline=2)
-        self.play_btn.grid(row=0, column=5, padx=5)
+        self.play_btn.grid(row=0, column=6, padx=5)
         
         self.stop_btn = ttk.Button(button_frame, text="⬛ sTop", command=self.stop_auto_play, state='disabled', underline=2)
-        self.stop_btn.grid(row=0, column=6, padx=5)
+        self.stop_btn.grid(row=0, column=7, padx=5)
         
         # Model selection dropdown
         model_label = ttk.Label(button_frame, text="Model:")
-        model_label.grid(row=0, column=7, padx=(20, 5))
+        model_label.grid(row=0, column=8, padx=(20, 5))
         
         self.model_var = tk.StringVar(value="gpt-5")
         self.model_dropdown = ttk.Combobox(button_frame, textvariable=self.model_var, 
                                            values=["gpt-5", "gpt-5-mini", "gpt-4o", "gpt-4o-mini", "o1", "o1-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
                                            state="readonly", width=15)
-        self.model_dropdown.grid(row=0, column=8, padx=5)
+        self.model_dropdown.grid(row=0, column=9, padx=5)
         
         # Status label
         self.status_label = ttk.Label(button_frame, text="Ready", foreground="green")
-        self.status_label.grid(row=0, column=9, padx=20)
+        self.status_label.grid(row=0, column=10, padx=20)
         
         # Bind keyboard shortcuts (store for later unbinding)
         self.hotkeys_enabled = True
@@ -376,10 +379,10 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             self.strikes_tree.heading(col, text=col)
             self.strikes_tree.column(col, width=final_width)
         
-        # Store column widths
+        # Store column widths for reference
         self.strikes_col_widths = final_col_widths
         
-        # Add rows without wrapping
+        # Add rows without wrapping - single line only
         for idx, row in self.strikes_df.iterrows():
             values = [str(row[col]) for col in current_columns]
             self.strikes_tree.insert('', 'end', iid=idx, values=values)
@@ -912,6 +915,10 @@ Return ONLY valid JSON in the format shown above, nothing else."""
                 if not isinstance(gt_ids, list):
                     gt_ids = []
                     reasoning = f'Invalid gt_ids format: {type(gt_ids).__name__}. ' + reasoning
+                
+                # Prepend model name to reasoning
+                model_name = selected_model.upper()
+                reasoning = f"{model_name}: {reasoning}"
                     
                 # Update response text with parsing success
                 self.response_text.config(state='normal')
@@ -921,7 +928,8 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             elif isinstance(result_json, list):
                 # Fallback: old format compatibility
                 gt_ids = result_json
-                reasoning = 'No reasoning provided (old format)'
+                model_name = selected_model.upper()
+                reasoning = f'{model_name}: No reasoning provided (old format)'
                 
                 # Update response text
                 self.response_text.config(state='normal')
@@ -929,7 +937,8 @@ Return ONLY valid JSON in the format shown above, nothing else."""
                 self.response_text.config(state='disabled')
             else:
                 gt_ids = []
-                reasoning = f'Invalid response format: {type(result_json).__name__}'
+                model_name = selected_model.upper()
+                reasoning = f'{model_name}: Invalid response format: {type(result_json).__name__}'
                 
                 # Update response text
                 self.response_text.config(state='normal')
@@ -970,12 +979,14 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             gt_ids_col_idx = self.strikes_df.columns.get_loc('gt_ids')
             reasoning_col_idx = self.strikes_df.columns.get_loc('reasoning')
             
+            model_name = selected_model.upper()
+            
             if ids:
                 self.strikes_df.iat[strike_idx, gt_ids_col_idx] = json.dumps(ids)
-                self.strikes_df.iat[strike_idx, reasoning_col_idx] = f'JSON parse error - extracted IDs from text: {str(e)}'
+                self.strikes_df.iat[strike_idx, reasoning_col_idx] = f'{model_name}: JSON parse error - extracted IDs from text: {str(e)}'
                 return ids
             self.strikes_df.iat[strike_idx, gt_ids_col_idx] = ''
-            self.strikes_df.iat[strike_idx, reasoning_col_idx] = f'Parse error: {str(e)}. Response: {result_text[:200]}'
+            self.strikes_df.iat[strike_idx, reasoning_col_idx] = f'{model_name}: Parse error: {str(e)}. Response: {result_text[:200]}'
             return []
         except Exception as e:
             # Catch any other errors
@@ -992,9 +1003,49 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             gt_ids_col_idx = self.strikes_df.columns.get_loc('gt_ids')
             reasoning_col_idx = self.strikes_df.columns.get_loc('reasoning')
             
+            model_name = selected_model.upper()
+            
             self.strikes_df.iat[strike_idx, gt_ids_col_idx] = ''
-            self.strikes_df.iat[strike_idx, reasoning_col_idx] = f'Unexpected error: {str(e)}'
+            self.strikes_df.iat[strike_idx, reasoning_col_idx] = f'{model_name}: Unexpected error: {str(e)}'
             raise
+    
+    def reset_matches(self):
+        """Reset matches for the selected strike and show all county estates"""
+        if self.selected_strike_idx is None:
+            messagebox.showwarning("Warning", "Please select a strike row first")
+            return
+        
+        try:
+            strike_row = self.strikes_df.iloc[self.selected_strike_idx]
+            county = strike_row['county']
+            
+            # Clear gt_ids and reasoning for this row
+            if 'gt_ids' in self.strikes_df.columns:
+                gt_ids_col_idx = self.strikes_df.columns.get_loc('gt_ids')
+                self.strikes_df.iat[self.selected_strike_idx, gt_ids_col_idx] = ''
+            
+            if 'reasoning' in self.strikes_df.columns:
+                reasoning_col_idx = self.strikes_df.columns.get_loc('reasoning')
+                self.strikes_df.iat[self.selected_strike_idx, reasoning_col_idx] = ''
+            
+            # Save to CSV
+            self.strikes_df.to_csv(self.strikes_path, sep=';', index=False, encoding='utf-8', lineterminator='\n')
+            
+            # Refresh the strikes table
+            self.populate_strikes_table()
+            
+            # Re-select the row
+            self.strikes_tree.selection_set(str(self.selected_strike_idx))
+            self.strikes_tree.see(str(self.selected_strike_idx))
+            
+            # Display all estates from the county
+            self.display_estates_by_county(county)
+            
+            self.status_label.config(text="Matches reset", foreground="green")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to reset: {str(e)}")
+            self.status_label.config(text="Reset failed", foreground="red")
     
     def save_matches(self):
         """Save the current matches to CSV (only checked estates)"""
@@ -1036,6 +1087,44 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save: {str(e)}")
             self.status_label.config(text="Save failed", foreground="red")
+    
+    def reset_matches(self):
+        """Reset matches for the selected strike and show all county estates"""
+        if self.selected_strike_idx is None:
+            messagebox.showwarning("Warning", "Please select a strike row first")
+            return
+        
+        try:
+            strike_row = self.strikes_df.iloc[self.selected_strike_idx]
+            county = strike_row['county']
+            
+            # Clear gt_ids and reasoning for this row
+            if 'gt_ids' in self.strikes_df.columns:
+                gt_ids_col_idx = self.strikes_df.columns.get_loc('gt_ids')
+                self.strikes_df.iat[self.selected_strike_idx, gt_ids_col_idx] = ''
+            
+            if 'reasoning' in self.strikes_df.columns:
+                reasoning_col_idx = self.strikes_df.columns.get_loc('reasoning')
+                self.strikes_df.iat[self.selected_strike_idx, reasoning_col_idx] = ''
+            
+            # Save to CSV
+            self.strikes_df.to_csv(self.strikes_path, sep=';', index=False, encoding='utf-8', lineterminator='\n')
+            
+            # Refresh the strikes table
+            self.populate_strikes_table()
+            
+            # Re-select the row
+            self.strikes_tree.selection_set(str(self.selected_strike_idx))
+            self.strikes_tree.see(str(self.selected_strike_idx))
+            
+            # Display all estates from the county
+            self.display_estates_by_county(county)
+            
+            self.status_label.config(text="Matches reset", foreground="green")
+        
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to reset: {str(e)}")
+            self.status_label.config(text="Reset failed", foreground="red")
     
     def go_to_next(self):
         """Move to the next row in strikes table"""
