@@ -4,6 +4,7 @@ import pandas as pd
 import os
 from pathlib import Path
 import json
+import threading
 
 # Try to import OpenAI - user will need to install and configure
 try:
@@ -111,10 +112,36 @@ class EstateLookupGUI:
         strikes_columns = list(self.strikes_df.columns)
         self.strikes_tree = ttk.Treeview(strikes_frame, columns=strikes_columns, show='headings', height=10)
         
-        # Configure columns
+        # Calculate proportional widths that fit screen
+        available_width = 1350  # Approximate available width in pixels
+        max_col_width = int(available_width * 0.2)  # Cap at 20% of screen
+        col_widths = {}
+        
         for col in strikes_columns:
+            # Get all lengths in this column
+            lengths = [len(str(col))]  # Include header
+            lengths.extend([len(str(val)) for val in self.strikes_df[col]])
+            
+            # Use 90th percentile to avoid outliers
+            lengths.sort()
+            percentile_90_idx = int(len(lengths) * 0.9)
+            representative_len = lengths[percentile_90_idx]
+            
+            col_widths[col] = max(representative_len, 5)  # Minimum 5 chars
+        
+        # Scale proportionally to fit available width
+        total_width = sum(col_widths.values())
+        final_col_widths = {}
+        for col in strikes_columns:
+            proportional_width = int((col_widths[col] / total_width) * available_width)
+            # Apply 20% cap and 40px minimum
+            final_width = max(min(proportional_width, max_col_width), 40)
+            final_col_widths[col] = final_width
             self.strikes_tree.heading(col, text=col)
-            self.strikes_tree.column(col, width=100)
+            self.strikes_tree.column(col, width=final_width)
+        
+        # Store column widths for reference
+        self.strikes_col_widths = final_col_widths
         
         # Add scrollbars
         strikes_vsb = ttk.Scrollbar(strikes_frame, orient="vertical", command=self.strikes_tree.yview)
@@ -167,6 +194,13 @@ class EstateLookupGUI:
         
         # Bind click event to toggle checkboxes
         self.estates_tree.bind('<Button-1>', self.on_estate_click)
+        
+        # Bind double-click on headers for sorting
+        self.estates_tree.bind('<Double-Button-1>', self.on_estate_header_double_click)
+        
+        # Track current sort state
+        self.estates_sort_column = None
+        self.estates_sort_reverse = False
         
         # === SECTION 3: Prompt Text Box (Split into two columns) ===
         prompt_label = ttk.Label(main_frame, text="LLM Prompt", font=('Arial', 12, 'bold'))
@@ -292,7 +326,7 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         
         self.model_var = tk.StringVar(value="gpt-5")
         self.model_dropdown = ttk.Combobox(button_frame, textvariable=self.model_var, 
-                                           values=["gpt-5", "gpt-4o", "gpt-4o-mini", "o1", "o1-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+                                           values=["gpt-5", "gpt-5-mini", "gpt-4o", "gpt-4o-mini", "o1", "o1-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
                                            state="readonly", width=15)
         self.model_dropdown.grid(row=0, column=8, padx=5)
         
@@ -314,14 +348,40 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         current_columns = list(self.strikes_df.columns)
         self.strikes_tree['columns'] = current_columns
         
-        # Reconfigure column headings and widths
-        for col in current_columns:
-            self.strikes_tree.heading(col, text=col)
-            self.strikes_tree.column(col, width=100)
+        # Calculate proportional widths that fit screen
+        available_width = 1350  # Approximate available width in pixels
+        max_col_width = int(available_width * 0.2)  # Cap at 20% of screen
+        col_widths = {}
         
-        # Add rows
+        for col in current_columns:
+            # Get all lengths in this column
+            lengths = [len(str(col))]  # Include header
+            lengths.extend([len(str(val)) for val in self.strikes_df[col]])
+            
+            # Use 90th percentile to avoid outliers
+            lengths.sort()
+            percentile_90_idx = int(len(lengths) * 0.9)
+            representative_len = lengths[percentile_90_idx]
+            
+            col_widths[col] = max(representative_len, 5)  # Minimum 5 chars
+        
+        # Scale proportionally to fit available width
+        total_width = sum(col_widths.values())
+        final_col_widths = {}
+        for col in current_columns:
+            proportional_width = int((col_widths[col] / total_width) * available_width)
+            # Apply 20% cap and 40px minimum
+            final_width = max(min(proportional_width, max_col_width), 40)
+            final_col_widths[col] = final_width
+            self.strikes_tree.heading(col, text=col)
+            self.strikes_tree.column(col, width=final_width)
+        
+        # Store column widths
+        self.strikes_col_widths = final_col_widths
+        
+        # Add rows without wrapping
         for idx, row in self.strikes_df.iterrows():
-            values = [row[col] for col in current_columns]
+            values = [str(row[col]) for col in current_columns]
             self.strikes_tree.insert('', 'end', iid=idx, values=values)
     
     def enable_hotkeys(self, event=None):
@@ -365,7 +425,7 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         self.root.unbind('<KeyPress-R>')
     
     def on_strike_double_click(self, event):
-        """Handle double-click on strike to edit it"""
+        """Handle double-click on strike to view/edit cell content"""
         region = self.strikes_tree.identify('region', event.x, event.y)
         if region != 'cell':
             return
@@ -380,12 +440,12 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         
         # Get current value
         strike_idx = int(item)
-        current_value = self.strikes_df.at[strike_idx, col_name]
+        current_value = str(self.strikes_df.at[strike_idx, col_name])
         
-        # Create edit dialog
+        # Create view/edit dialog
         dialog = tk.Toplevel(self.root)
-        dialog.title(f"Edit {col_name}")
-        dialog.geometry("400x150")
+        dialog.title(f"View/Edit: {col_name} (Row {strike_idx})")
+        dialog.geometry("700x400")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -395,40 +455,54 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (dialog.winfo_height() // 2)
         dialog.geometry(f"+{x}+{y}")
         
-        # Label
-        label = ttk.Label(dialog, text=f"Edit {col_name}:")
-        label.pack(pady=(20, 5), padx=20)
+        # Main frame
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Entry field
-        entry = ttk.Entry(dialog, width=50)
-        entry.insert(0, current_value)
-        entry.pack(pady=5, padx=20)
-        entry.focus()
-        entry.select_range(0, tk.END)
+        # Label
+        label = ttk.Label(main_frame, text=f"Column: {col_name}", font=('Arial', 10, 'bold'))
+        label.pack(pady=(0, 5), anchor=tk.W)
+        
+        # Text widget with scrollbar
+        text_frame = ttk.Frame(main_frame)
+        text_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        text_widget = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD, height=15, font=('Consolas', 10))
+        text_widget.pack(fill=tk.BOTH, expand=True)
+        text_widget.insert('1.0', current_value)
+        text_widget.focus()
         
         # Save function
         def save_edit():
-            new_value = entry.get()
+            new_value = text_widget.get('1.0', tk.END).strip()
+            # Update dataframe
             self.strikes_df.at[strike_idx, col_name] = new_value
+            # Save to CSV immediately
+            self.strikes_df.to_csv(self.strikes_path, sep=';', index=False, encoding='utf-8', lineterminator='\n')
+            # Refresh the table
             self.populate_strikes_table()
             # Re-select the edited row
             self.strikes_tree.selection_set(str(strike_idx))
-            self.status_label.config(text="Strike data updated", foreground="green")
+            self.strikes_tree.see(str(strike_idx))
+            self.status_label.config(text="Changes saved to CSV", foreground="green")
             dialog.destroy()
         
         # Buttons
-        button_frame = ttk.Frame(dialog)
-        button_frame.pack(pady=15)
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X)
         
-        save_btn = ttk.Button(button_frame, text="Save", command=save_edit)
+        save_btn = ttk.Button(button_frame, text="Save to CSV", command=save_edit)
         save_btn.pack(side=tk.LEFT, padx=5)
         
-        cancel_btn = ttk.Button(button_frame, text="Cancel", command=dialog.destroy)
-        cancel_btn.pack(side=tk.LEFT, padx=5)
+        close_btn = ttk.Button(button_frame, text="Close (no save)", command=dialog.destroy)
+        close_btn.pack(side=tk.LEFT, padx=5)
         
-        # Bind Enter key to save
-        entry.bind('<Return>', lambda e: save_edit())
-        entry.bind('<Escape>', lambda e: dialog.destroy())
+        # Info label
+        info_label = ttk.Label(button_frame, text="Changes will be saved to CSV file", foreground="blue", font=('Arial', 8))
+        info_label.pack(side=tk.RIGHT, padx=5)
+        
+        # Bind Escape key to close
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
     
     def reload_data(self):
         """Reload data from CSV files"""
@@ -495,6 +569,51 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             values = list(self.estates_tree.item(item, 'values'))
             values[0] = '☑' if new_state else '☐'
             self.estates_tree.item(item, values=values)
+    
+    def on_estate_header_double_click(self, event):
+        """Handle double-click on estate table header to sort"""
+        region = self.estates_tree.identify('region', event.x, event.y)
+        if region != 'heading':
+            return
+        
+        column = self.estates_tree.identify_column(event.x)
+        col_idx = int(column.replace('#', '')) - 1
+        
+        # Get the column name (accounting for checkbox column)
+        if col_idx == 0:
+            # Don't sort by checkbox column
+            return
+        
+        col_name = list(self.estates_df.columns)[col_idx - 1]  # -1 because first column is checkbox
+        
+        # Toggle sort direction if clicking the same column
+        if self.estates_sort_column == col_name:
+            self.estates_sort_reverse = not self.estates_sort_reverse
+        else:
+            self.estates_sort_column = col_name
+            self.estates_sort_reverse = False
+        
+        # Get current data from treeview with checkbox states
+        current_data = []
+        for item in self.estates_tree.get_children():
+            values = self.estates_tree.item(item, 'values')
+            checkbox_state = self.estate_checkboxes.get(item, False)
+            current_data.append((values, checkbox_state))
+        
+        # Sort the data by the selected column (skip checkbox column)
+        sorted_data = sorted(current_data, key=lambda x: str(x[0][col_idx]), reverse=self.estates_sort_reverse)
+        
+        # Clear and repopulate the treeview
+        for item in self.estates_tree.get_children():
+            self.estates_tree.delete(item)
+        self.estate_checkboxes.clear()
+        
+        for values, checkbox_state in sorted_data:
+            # Update checkbox character based on saved state
+            values_list = list(values)
+            values_list[0] = '☑' if checkbox_state else '☐'
+            item_id = self.estates_tree.insert('', 'end', values=values_list)
+            self.estate_checkboxes[item_id] = checkbox_state
     
     def on_strike_selected(self, event):
         """Handle strike row selection"""
@@ -567,7 +686,7 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         self.status_label.config(text=f"Showing {len(matched_estates)} matched estates")
     
     def lookup_single(self):
-        """Perform LLM lookup for the selected strike"""
+        """Perform LLM lookup for the selected strike (non-blocking)"""
         if self.selected_strike_idx is None:
             messagebox.showwarning("Warning", "Please select a strike row first")
             return
@@ -576,39 +695,48 @@ Return ONLY valid JSON in the format shown above, nothing else."""
             messagebox.showerror("Error", "OpenAI client not configured. Please install openai package and set OPENAI_API_KEY environment variable.")
             return
         
-        self.status_label.config(text="Looking up...", foreground="orange")
-        self.root.update()
+        print("\n" + "#"*80)
+        print("### STARTING API CALL (non-blocking) ###")
+        print("#"*80 + "\n")
         
-        # VERBOSE DEBUG: Print column information
-        print("\n=== DEBUG: Column Information ===")
-        print("Number of columns:", len(self.strikes_df.columns))
-        print("\nColumn names (repr):")
-        for i, col in enumerate(self.strikes_df.columns):
-            print(f"  [{i}] {repr(col)} (type: {type(col).__name__})")
-        print("\nColumn names (str):")
-        print(self.strikes_df.columns.tolist())
-        print("=================================\n")
+        self.status_label.config(text="API call in progress (non-blocking)...", foreground="orange")
+        self.lookup_btn.config(state='disabled')
+        self.root.update_idletasks()  # Force GUI update
         
-        try:
-            gt_ids = self.perform_llm_lookup(self.selected_strike_idx)
-            
-            if gt_ids:
-                strike_row = self.strikes_df.iloc[self.selected_strike_idx]
-                self.display_estates_by_ids(json.dumps(gt_ids), strike_row['county'])
-                self.status_label.config(text=f"Found {len(gt_ids)} matches", foreground="green")
-            else:
-                self.status_label.config(text="No matches found", foreground="blue")
+        # Run the lookup in a separate thread to keep GUI responsive
+        def lookup_thread():
+            try:
+                print("[Thread] Starting LLM lookup...")
+                gt_ids = self.perform_llm_lookup(self.selected_strike_idx)
+                print("[Thread] LLM lookup completed successfully")
+                
+                # Update GUI from main thread
+                self.root.after(0, self._finish_lookup, gt_ids, None)
+            except Exception as e:
+                import traceback
+                error_details = f"Lookup failed: {type(e).__name__}: {str(e)}\n\nFull traceback:\n{traceback.format_exc()}"
+                print("\n=== DETAILED ERROR ===")
+                print(error_details)
+                print("======================\n")
+                self.root.after(0, self._finish_lookup, None, error_details)
         
-        except Exception as e:
-            import traceback
-            error_details = f"Lookup failed: {type(e).__name__}: {str(e)}\n\nFull traceback:\n{traceback.format_exc()}\n\nDataFrame columns: {list(self.strikes_df.columns)}\n\nColumn names with repr:\n"
-            for col in self.strikes_df.columns:
-                error_details += f"  {repr(col)}\n"
-            messagebox.showerror("Error", error_details)
+        thread = threading.Thread(target=lookup_thread, daemon=True)
+        thread.start()
+        print("[Main thread] API call thread started, GUI remains responsive\n")
+    
+    def _finish_lookup(self, gt_ids, error):
+        """Callback to finish lookup from main thread"""
+        self.lookup_btn.config(state='normal')
+        
+        if error:
+            messagebox.showerror("Error", error)
             self.status_label.config(text="Lookup failed", foreground="red")
-            print("=== DETAILED ERROR ===")
-            print(error_details)
-            print("======================")
+        elif gt_ids:
+            strike_row = self.strikes_df.iloc[self.selected_strike_idx]
+            self.display_estates_by_ids(json.dumps(gt_ids), strike_row['county'])
+            self.status_label.config(text=f"Found {len(gt_ids)} matches", foreground="green")
+        else:
+            self.status_label.config(text="No matches found", foreground="blue")
 
     
     def perform_llm_lookup(self, strike_idx):
@@ -666,39 +794,87 @@ Return ONLY valid JSON in the format shown above, nothing else."""
         # Prepare system message
         system_msg = "You are a historical data matching assistant specializing in Hungarian agricultural history. Use careful reasoning to match strike records to estates, considering historical place name changes and noble title variations. Return only valid JSON."
         
+        # Log the API request with FULL details
+        print("\n" + "="*80)
+        print(f"=== API REQUEST to {selected_model} ===")
+        print("="*80)
+        
         # Call OpenAI API with model-specific parameters
         if selected_model.startswith('o1'):
             # o1 models don't support system messages or temperature
             # Combine system message with user prompt
             full_prompt = f"{system_msg}\n\n{prompt}"
+            messages = [{"role": "user", "content": full_prompt}]
+            print("\nMESSAGE [0]:")
+            print(f"  Role: user")
+            print(f"  Content length: {len(full_prompt)} characters")
+            print(f"\n--- FULL CONTENT START ---")
+            print(full_prompt)
+            print("--- FULL CONTENT END ---\n")
+            
             response = self.client.chat.completions.create(
                 model=selected_model,
-                messages=[
-                    {"role": "user", "content": full_prompt}
-                ]
+                messages=messages
             )
-        elif selected_model == 'gpt-5':
+        elif selected_model == 'gpt-5' or selected_model == 'gpt-5-mini':
             # gpt-5 doesn't support temperature parameter
+            messages = [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt}
+            ]
+            print("\nMESSAGE [0] (system):")
+            print(f"  Content length: {len(system_msg)} characters")
+            print(f"\n--- SYSTEM MESSAGE START ---")
+            print(system_msg)
+            print("--- SYSTEM MESSAGE END ---\n")
+            
+            print("\nMESSAGE [1] (user):")
+            print(f"  Content length: {len(prompt)} characters")
+            print(f"\n--- USER PROMPT START ---")
+            print(prompt)
+            print("--- USER PROMPT END ---\n")
+            
             response = self.client.chat.completions.create(
                 model=selected_model,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": prompt}
-                ]
+                messages=messages
             )
         else:
             # Other models (gpt-4o, gpt-4-turbo, gpt-3.5-turbo) support temperature
+            messages = [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt}
+            ]
+            print("\nMESSAGE [0] (system):")
+            print(f"  Content length: {len(system_msg)} characters")
+            print(f"\n--- SYSTEM MESSAGE START ---")
+            print(system_msg)
+            print("--- SYSTEM MESSAGE END ---\n")
+            
+            print("\nMESSAGE [1] (user):")
+            print(f"  Content length: {len(prompt)} characters")
+            print(f"\n--- USER PROMPT START ---")
+            print(prompt)
+            print("--- USER PROMPT END ---\n")
+            
+            print(f"Temperature: 0.2\n")
+            
             response = self.client.chat.completions.create(
                 model=selected_model,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": prompt}
-                ],
+                messages=messages,
                 temperature=0.2
             )
         
+        print("\n" + "="*80)
+        print("=== API RESPONSE ===")
+        print("="*80)
+        
         # Parse response
         result_text = response.choices[0].message.content.strip()
+        print(f"\nResponse length: {len(result_text)} characters")
+        print(f"\n--- FULL RESPONSE START ---")
+        print(result_text)
+        print("--- FULL RESPONSE END ---")
+        print("\n" + "="*80 + "\n")
         
         # Display the raw response in the response text box
         self.response_text.config(state='normal')
